@@ -1,9 +1,17 @@
+# Netlify build settings for CreatorHub (static Vite site).
 [build]
-  command = "bun run build"
+  command = "npm install && npm run build"
   publish = "dist"
 
-# Public, browser-visible build values only (Vite inlines VITE_* into the bundle).
-# Secrets (Circle API key, entity secret, RPC proxy token) must never live here or
-# in a committed .env file.
 [build.environment]
+  NODE_VERSION = "20"
+  # Public values only (they ship to the browser). Network defaults to Arc Mainnet.
+  VITE_NETWORK = "mainnet"
   VITE_CREATOR_HUB_V2_ADDRESS = "0x06dF56c861847c697986fe08e76e76B96201CA99"
+  # Set VITE_APP_URL (your custom domain) in Netlify's site settings, not here.
+
+# Safe fallback so any deep link serves the app.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

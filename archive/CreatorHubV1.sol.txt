@@ -1,0 +1,314 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
+contract CreatorHub is Ownable, Pausable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    error ContentNotFound();
+    error NotContentCreator();
+    error ContentNotActive();
+    error AlreadyPurchased();
+    error InsufficientPayment();
+    error FeeTooHigh();
+    error Unauthorized();
+    error PriceExceedsMax();
+
+    struct Content {
+        uint256 id;
+        address creator;
+        string title;
+        string description;
+        string coverImageUrl;
+        string contentUrl;
+        uint256 priceUsdc;
+        uint256 totalSales;
+        uint256 totalEarnings;
+        bool isActive;
+        uint256 createdAt;
+    }
+
+    event ContentListed(uint256 indexed contentId, address indexed creator, uint256 priceUsdc);
+    event ContentUpdated(uint256 indexed contentId);
+    event ContentActiveChanged(uint256 indexed contentId, bool active);
+    event ContentPurchased(
+        uint256 indexed contentId,
+        address indexed buyer,
+        address indexed creator,
+        uint256 priceUsdc,
+        uint256 creatorEarnings
+    );
+    event Withdrawn(address indexed recipient, uint256 amount);
+    event ProtocolFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
+    event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
+
+    IERC20 public immutable usdc;
+    address public feeRecipient;
+    uint256 public protocolFeeBps;
+    uint256 public contentCount;
+
+    mapping(uint256 => Content) private contents;
+    mapping(address => uint256[]) private creatorContents;
+    mapping(address => uint256[]) private buyerPurchases;
+    mapping(address => mapping(uint256 => bool)) private purchased;
+    mapping(address => uint256) public pendingWithdrawals;
+
+    uint256 private constant MAX_FEE_BPS = 1_000;
+    uint256 private constant BPS_DENOMINATOR = 10_000;
+
+    constructor(address usdcToken, address initialOwner) Ownable(initialOwner) {
+        usdc = IERC20(usdcToken);
+        feeRecipient = initialOwner;
+        protocolFeeBps = 250;
+    }
+
+    function listContent(
+        string calldata title,
+        string calldata description,
+        string calldata coverImageUrl,
+        string calldata contentUrl,
+        uint256 priceUsdc
+    ) external whenNotPaused {
+        contentCount += 1;
+        uint256 contentId = contentCount;
+
+        contents[contentId] = Content({
+            id: contentId,
+            creator: msg.sender,
+            title: title,
+            description: description,
+            coverImageUrl: coverImageUrl,
+            contentUrl: contentUrl,
+            priceUsdc: priceUsdc,
+            totalSales: 0,
+            totalEarnings: 0,
+            isActive: true,
+            createdAt: block.timestamp
+        });
+
+        creatorContents[msg.sender].push(contentId);
+
+        emit ContentListed(contentId, msg.sender, priceUsdc);
+    }
+
+    function updateContent(
+        uint256 contentId,
+        string calldata title,
+        string calldata description,
+        string calldata coverImageUrl,
+        uint256 priceUsdc
+    ) external whenNotPaused {
+        Content storage content = _requireContent(contentId);
+
+        if (content.creator != msg.sender) {
+            revert NotContentCreator();
+        }
+
+        content.title = title;
+        content.description = description;
+        content.coverImageUrl = coverImageUrl;
+        content.priceUsdc = priceUsdc;
+
+        emit ContentUpdated(contentId);
+    }
+
+    /// @notice Allows a creator to set or update the gated content URL for their listing.
+    ///         Only callable by the original creator. Useful when the URL was left empty
+    ///         at listing time or needs to be rotated to a fresh link.
+    function updateContentUrl(uint256 contentId, string calldata newContentUrl) external whenNotPaused {
+        Content storage content = _requireContent(contentId);
+
+        if (content.creator != msg.sender) {
+            revert NotContentCreator();
+        }
+
+        content.contentUrl = newContentUrl;
+
+        emit ContentUpdated(contentId);
+    }
+
+    function setContentActive(uint256 contentId, bool active) external whenNotPaused {
+        Content storage content = _requireContent(contentId);
+
+        if (content.creator != msg.sender) {
+            revert NotContentCreator();
+        }
+
+        content.isActive = active;
+
+        emit ContentActiveChanged(contentId, active);
+    }
+
+    function purchaseContent(uint256 contentId, uint256 maxPriceUsdc) external nonReentrant whenNotPaused {
+        Content storage content = _requireContent(contentId);
+
+        if (content.priceUsdc > maxPriceUsdc) {
+            revert PriceExceedsMax();
+        }
+
+        if (!content.isActive) {
+            revert ContentNotActive();
+        }
+
+        if (purchased[msg.sender][contentId]) {
+            revert AlreadyPurchased();
+        }
+
+        uint256 price = content.priceUsdc;
+        if (price == 0) {
+            revert InsufficientPayment();
+        }
+
+        usdc.safeTransferFrom(msg.sender, address(this), price);
+
+        uint256 protocolFee = (price * protocolFeeBps) / BPS_DENOMINATOR;
+        uint256 creatorEarnings = price - protocolFee;
+
+        if (protocolFee > 0) {
+            pendingWithdrawals[feeRecipient] += protocolFee;
+        }
+        if (creatorEarnings > 0) {
+            pendingWithdrawals[content.creator] += creatorEarnings;
+        }
+
+        purchased[msg.sender][contentId] = true;
+        buyerPurchases[msg.sender].push(contentId);
+
+        content.totalSales += 1;
+        content.totalEarnings += creatorEarnings;
+
+        emit ContentPurchased(contentId, msg.sender, content.creator, price, creatorEarnings);
+    }
+
+    function hasPurchased(address buyer, uint256 contentId) external view returns (bool) {
+        return purchased[buyer][contentId];
+    }
+
+    function getContentUrl(uint256 contentId) external view returns (string memory) {
+        Content storage content = _requireContent(contentId);
+
+        if (msg.sender != content.creator && !purchased[msg.sender][contentId]) {
+            revert Unauthorized();
+        }
+
+        return content.contentUrl;
+    }
+
+    function getContent(uint256 contentId) external view returns (Content memory) {
+        Content storage stored = _requireContent(contentId);
+
+        Content memory result = stored;
+        if (msg.sender != stored.creator && !purchased[msg.sender][contentId]) {
+            result.contentUrl = "";
+        }
+
+        return result;
+    }
+
+    function getCreatorContents(address creator) external view returns (uint256[] memory) {
+        return creatorContents[creator];
+    }
+
+    function getCreatorStats(
+        address creator
+    ) external view returns (uint256 totalEarnings, uint256 totalSales, uint256 contentCountForCreator) {
+        uint256[] storage ids = creatorContents[creator];
+        contentCountForCreator = ids.length;
+
+        for (uint256 i = 0; i < ids.length; i++) {
+            Content storage content = contents[ids[i]];
+            totalEarnings += content.totalEarnings;
+            totalSales += content.totalSales;
+        }
+    }
+
+    function getBuyerPurchases(address buyer) external view returns (uint256[] memory) {
+        return buyerPurchases[buyer];
+    }
+
+    function getActiveContentIds() external view returns (uint256[] memory) {
+        uint256 activeCount = 0;
+
+        for (uint256 i = 1; i <= contentCount; i++) {
+            if (contents[i].isActive) {
+                activeCount += 1;
+            }
+        }
+
+        uint256[] memory activeIds = new uint256[](activeCount);
+        uint256 index = 0;
+
+        for (uint256 i = 1; i <= contentCount; i++) {
+            if (contents[i].isActive) {
+                activeIds[index] = i;
+                index += 1;
+            }
+        }
+
+        return activeIds;
+    }
+
+    function getAllContentIds() external view returns (uint256[] memory) {
+        uint256[] memory allIds = new uint256[](contentCount);
+
+        for (uint256 i = 1; i <= contentCount; i++) {
+            allIds[i - 1] = i;
+        }
+
+        return allIds;
+    }
+
+    function setProtocolFee(uint256 newFeeInBps) external onlyOwner {
+        if (newFeeInBps > MAX_FEE_BPS) {
+            revert FeeTooHigh();
+        }
+
+        emit ProtocolFeeUpdated(protocolFeeBps, newFeeInBps);
+        protocolFeeBps = newFeeInBps;
+    }
+
+    function setFeeRecipient(address newRecipient) external onlyOwner {
+        if (newRecipient == address(0)) {
+            revert Unauthorized();
+        }
+
+        emit FeeRecipientUpdated(feeRecipient, newRecipient);
+        feeRecipient = newRecipient;
+    }
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    function renounceOwnership() public override onlyOwner {
+        require(!paused(), "Cannot renounce while paused");
+        super.renounceOwnership();
+    }
+
+    function withdraw() external nonReentrant {
+        uint256 amount = pendingWithdrawals[msg.sender];
+        pendingWithdrawals[msg.sender] = 0;
+
+        if (amount > 0) {
+            usdc.safeTransfer(msg.sender, amount);
+            emit Withdrawn(msg.sender, amount);
+        }
+    }
+
+    function _requireContent(uint256 contentId) internal view returns (Content storage) {
+        if (contentId == 0 || contentId > contentCount) {
+            revert ContentNotFound();
+        }
+
+        return contents[contentId];
+    }
+}
