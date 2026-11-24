@@ -1,0 +1,9 @@
+[build]
+  command = "bun run build"
+  publish = "dist"
+
+# Public, browser-visible build values only (Vite inlines VITE_* into the bundle).
+# Secrets (Circle API key, entity secret, RPC proxy token) must never live here or
+# in a committed .env file.
+[build.environment]
+  VITE_CREATOR_HUB_V2_ADDRESS = "0x06dF56c861847c697986fe08e76e76B96201CA99"
