@@ -12,7 +12,7 @@ Content marketplace dApp on Arc. Creators list digital content for USDC; buyers 
 - `getContentUrl` authorises on `msg.sender`: frontend reads MUST pass `account: address` or the call reverts (msg.sender would be address(0)).
 - Known limitation: `contentUrl` is stored in plaintext, so it is readable from chain state by technical users. Documented in the UI and README.
 - Tests: `contracts/test/CreatorHubV2*.t.sol` (88 passing: unit, fuzz, solvency invariant).
-- **Deployment status:** Arc mainnet (chain 5042): `0x06dF56c861847c697986fe08e76e76B96201CA99`, deployed by the user (solc 0.8.28 + optimizer; owner, arbiter and fee recipient = `0x7E827996Cd8C6bac4aaAB76fa8b212ee4F44c1cB`). Selected by `VITE_CREATOR_HUB_V2_ADDRESS` in `.env`; `VITE_NETWORK` is unset (mainnet default). NOTE: deployed runtime code is 12,362 bytes; this repo's build is 12,448 bytes (paris, 200 runs; no tested setting reproduces 12,362, probably a different OpenZeppelin version or compiler settings). All 47 ABI selectors are present; state looks right (fee 250 bps, USDC 0x3600..., 0 listings). Not byte-identical to the reviewed build. Superseded mainnet deploy: `0x655afb37b7756Ace688df0E4357F5596e7aF831f` (21,167 bytes, solc 0.8.34, empty). Arc Testnet verification copy: `0x8815004dd69007e83450a5b690765532b62ad8a5`. Arc Studio never deploys to mainnet.
+- **Deployment status:** Arc mainnet (chain 5042): `0x06dF56c861847c697986fe08e76e76B96201CA99`, deployed by the user (solc 0.8.28 + optimizer; owner, arbiter and fee recipient = `0x7E827996Cd8C6bac4aaAB76fa8b212ee4F44c1cB`). Selected by `VITE_CREATOR_HUB_V2_ADDRESS` (`netlify.toml` `[build.environment]` for Netlify builds, local `.env` for dev); `VITE_NETWORK` is unset (mainnet default). NOTE: deployed runtime code is 12,362 bytes; this repo's build is 12,448 bytes (paris, 200 runs; no tested setting reproduces 12,362, probably a different OpenZeppelin version or compiler settings). All 47 ABI selectors are present; state looks right (fee 250 bps, USDC 0x3600..., 0 listings). Not byte-identical to the reviewed build. Superseded mainnet deploy: `0x655afb37b7756Ace688df0E4357F5596e7aF831f` (21,167 bytes, solc 0.8.34, empty). Arc Testnet verification copy: `0x8815004dd69007e83450a5b690765532b62ad8a5`. Arc Studio never deploys to mainnet.
 
 ### CreatorHub V1 (legacy, live on Arc mainnet, immutable)
 - Address: `0xcD68a0B299B51C67CfdbaE5Ff319DFBA2C9AF062` (chain 5042). Default for `VITE_CREATOR_HUB_V1_ADDRESS` on mainnet.
@@ -38,7 +38,8 @@ Content marketplace dApp on Arc. Creators list digital content for USDC; buyers 
 
 ## Gotchas
 - Never hard-code an address or domain outside `src/env.ts`. Wrong-case address pastes are normalised with `getAddress`.
-- No `.gitignore` is tracked yet in the workspace; never commit `.env`.
+- Never commit `.env` / `.envcat` (both gitignored). A `.env` with real Circle/RPC-proxy secrets was once pushed to the public GitHub repo; those keys must be treated as leaked.
+- GitHub "Add files via upload" dropped every folder (`src/`, `contracts/`, `scripts/`, `docs/`, `archive/`); push with git so directories are included. Until then `src/main.tsx` is a temporary "being updated" placeholder so Netlify builds pass; the real source replaces it.
 - The platform deployer wallet is shared and must not be used as owner/arbiter/fee recipient for anything real.
 
 ## Custom domain

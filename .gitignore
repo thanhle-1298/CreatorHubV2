@@ -5,3 +5,4 @@ dist
 .circle
 contracts/cache
 *.log
+.envcat
